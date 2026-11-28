@@ -4,6 +4,7 @@ import { Workout } from "../types";
 interface RecommendScreenProps {
   workout: Workout;
   onStart: () => void;
+  onPickNewWorkout: () => void;
   onNavigateToRecords: () => void;
   onNavigateToSettings: () => void;
 }
@@ -11,6 +12,7 @@ interface RecommendScreenProps {
 export default function RecommendScreen({
   workout,
   onStart,
+  onPickNewWorkout,
   onNavigateToRecords,
   onNavigateToSettings
 }: RecommendScreenProps) {
@@ -39,8 +41,23 @@ export default function RecommendScreen({
         <article className="w-full max-w-lg bg-surface-container-lowest rounded-2xl overflow-hidden relative border border-surface-container-high transition-all" style={{ boxShadow: "0 10px 30px rgba(173, 42, 40, 0.05)" }}>
           {/* Badge overlays */}
           <div className="absolute top-4 left-4 z-10">
-            <span className="bg-primary/90 text-white font-bold text-xs px-3 py-1.5 rounded-full shadow-sm">
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={onPickNewWorkout}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onPickNewWorkout();
+                }
+              }}
+              title="새로운 운동 영상 찾기"
+              className="bg-primary/90 hover:bg-primary text-white font-bold text-xs px-3 py-1.5 rounded-full shadow-sm cursor-pointer active:scale-95 transition-all inline-flex items-center gap-1"
+            >
               Today's Pick 🔥
+              <span className="material-symbols-outlined text-[14px]" style={{ fontVariationSettings: "'FILL' 0" }}>
+                refresh
+              </span>
             </span>
           </div>
 

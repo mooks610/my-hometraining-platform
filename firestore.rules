@@ -1,8 +1,70 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidWorkoutLog(data) {
+      return data.keys().hasAll(['id', 'workoutId', 'title', 'dateString', 'timestamp', 'durationMinutes', 'target', 'thumbnail'])
+        && data.keys().hasOnly(['id', 'workoutId', 'title', 'dateString', 'timestamp', 'durationMinutes', 'durationSeconds', 'startTime', 'endTime', 'startTimestamp', 'endTimestamp', 'target', 'thumbnail'])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.workoutId is string && data.workoutId.size() >= 1 && data.workoutId.size() <= 128
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.dateString is string && data.dateString.size() == 10 && data.dateString.matches('^\\d{4}\\.\\d{2}\\.\\d{2}$')
+        && data.timestamp is number && data.timestamp > 0
+        && data.durationMinutes is number && data.durationMinutes >= 1 && data.durationMinutes <= 1440
+        && (!('durationSeconds' in data) || (data.durationSeconds is number && data.durationSeconds >= 0 && data.durationSeconds <= 86400))
+        && (!('startTime' in data) || (data.startTime is string && data.startTime.size() == 5 && data.startTime.matches('^\\d{2}:\\d{2}$')))
+        && (!('endTime' in data) || (data.endTime is string && data.endTime.size() == 5 && data.endTime.matches('^\\d{2}:\\d{2}$')))
+        && (!('startTimestamp' in data) || (data.startTimestamp is number && data.startTimestamp > 0))
+        && (!('endTimestamp' in data) || (data.endTimestamp is number && data.endTimestamp > 0))
+        && data.target is string && data.target.size() >= 1 && data.target.size() <= 50
+        && data.thumbnail is string && data.thumbnail.size() >= 1 && data.thumbnail.size() <= 1000;
+    }
+
+    function isValidUserSettings(data) {
+      return data.keys().hasAll(['alarmTime', 'meridiem', 'alarmHour', 'alarmMin', 'repeatDays', 'motivation'])
+        && data.keys().hasOnly(['alarmTime', 'meridiem', 'alarmHour', 'alarmMin', 'repeatDays', 'motivation'])
+        && data.alarmTime is string && data.alarmTime.size() >= 1 && data.alarmTime.size() <= 10
+        && data.meridiem in ['am', 'pm']
+        && data.alarmHour is string && data.alarmHour.size() >= 1 && data.alarmHour.size() <= 2
+        && data.alarmMin is string && data.alarmMin.size() >= 1 && data.alarmMin.size() <= 2
+        && data.repeatDays is list && data.repeatDays.size() <= 7
+        && (data.repeatDays.size() == 0 || data.repeatDays[0] is string)
+        && data.motivation is string && data.motivation.size() <= 200;
+    }
+
     match /workoutLogs/{logId} {
-      allow read, write: if true;
+      allow list: if true;
+      allow get: if isValidId(logId);
+      allow create: if isValidId(logId) && isValidWorkoutLog(incoming());
+      allow update: if isValidId(logId)
+        && isValidWorkoutLog(incoming())
+        && incoming().id == existing().id
+        && incoming().workoutId == existing().workoutId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['startTime', 'endTime', 'startTimestamp', 'endTimestamp', 'durationMinutes', 'durationSeconds', 'timestamp', 'dateString', 'title', 'target', 'thumbnail']);
+      allow delete: if isValidId(logId);
+    }
+
+    match /userSettings/{settingId} {
+      allow list: if false;
+      allow get: if isValidId(settingId);
+      allow create: if isValidId(settingId) && isValidUserSettings(incoming());
+      allow update: if isValidId(settingId) && isValidUserSettings(incoming());
+      allow delete: if false;
     }
   }
 }

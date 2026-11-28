@@ -2,25 +2,48 @@
   "entities": {
     "WorkoutLog": {
       "title": "Workout Log",
-      "description": "An entry for a completed workout",
+      "description": "An entry for a completed workout session with start time, end time, and duration",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "workoutId": { "type": "string" },
-        "title": { "type": "string" },
-        "dateString": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128 },
+        "workoutId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 200 },
+        "dateString": { "type": "string", "pattern": "^\\d{4}\\.\\d{2}\\.\\d{2}$", "maxLength": 10 },
         "timestamp": { "type": "number" },
         "durationMinutes": { "type": "number" },
-        "target": { "type": "string" },
-        "thumbnail": { "type": "string" }
+        "durationSeconds": { "type": "number" },
+        "startTime": { "type": "string", "pattern": "^\\d{2}:\\d{2}$", "maxLength": 5 },
+        "endTime": { "type": "string", "pattern": "^\\d{2}:\\d{2}$", "maxLength": 5 },
+        "startTimestamp": { "type": "number" },
+        "endTimestamp": { "type": "number" },
+        "target": { "type": "string", "maxLength": 50 },
+        "thumbnail": { "type": "string", "maxLength": 1000 }
       },
       "required": ["id", "workoutId", "title", "dateString", "timestamp", "durationMinutes", "target", "thumbnail"]
+    },
+    "UserSettings": {
+      "title": "User Settings",
+      "description": "User workout reminder schedule and motivation settings",
+      "type": "object",
+      "properties": {
+        "alarmTime": { "type": "string", "maxLength": 10 },
+        "meridiem": { "type": "string", "enum": ["am", "pm"] },
+        "alarmHour": { "type": "string", "maxLength": 2 },
+        "alarmMin": { "type": "string", "maxLength": 2 },
+        "repeatDays": { "type": "array" },
+        "motivation": { "type": "string", "maxLength": 200 }
+      },
+      "required": ["alarmTime", "meridiem", "alarmHour", "alarmMin", "repeatDays", "motivation"]
     }
   },
   "firestore": {
     "workoutLogs/{logId}": {
       "schema": "WorkoutLog",
-      "description": "User's workout logs"
+      "description": "User's completed workout logs with start/end time and duration"
+    },
+    "userSettings/{settingId}": {
+      "schema": "UserSettings",
+      "description": "User's workout reminder and motivation settings"
     }
   }
 }

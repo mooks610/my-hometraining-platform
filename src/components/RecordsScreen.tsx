@@ -1,12 +1,28 @@
 import React, { useState } from "react";
 import { WorkoutLog } from "../types";
+import {
+  calculateDurationMinutes,
+  calculateEndHHMM,
+  buildTimestampsFromTimes,
+} from "../utils/timeUtils";
+
+interface LogTimeUpdates {
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  durationSeconds: number;
+  startTimestamp: number;
+  endTimestamp: number;
+}
 
 interface RecordsScreenProps {
   logs: WorkoutLog[];
   activeTab: "LIST" | "REPORT";
   onNavigateToRecommend: () => void;
   onNavigateToSettings: () => void;
-  onClearLogs?: () => void; // Optional admin clear helper
+  onUpdateLog?: (log: WorkoutLog, updates: LogTimeUpdates) => Promise<void>;
+  onDeleteLog?: (log: WorkoutLog) => Promise<void>;
+  onClearLogs?: () => Promise<void> | void;
 }
 
 export default function RecordsScreen({
@@ -14,19 +30,28 @@ export default function RecordsScreen({
   activeTab,
   onNavigateToRecommend,
   onNavigateToSettings,
-  onClearLogs
+  onUpdateLog,
+  onDeleteLog,
+  onClearLogs,
 }: RecordsScreenProps) {
+  const [editingLog, setEditingLog] = useState<WorkoutLog | null>(null);
+  const [editStartTime, setEditStartTime] = useState<string>("08:00");
+  const [editEndTime, setEditEndTime] = useState<string>("08:15");
+  const [editDurationMinutes, setEditDurationMinutes] = useState<number>(15);
+  const [isUpdating, setIsUpdating] = useState<boolean>(false);
 
-  // Format dynamic dates
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState<boolean>(false);
+
+  // Sort by timestamp desc
   const sortedLogs = [...logs].sort((a, b) => b.timestamp - a.timestamp);
 
   // Compute stats
   const totalWorkouts = logs.length;
-  // Calculate relative goal completion (target 30 days of workout per month)
+  const totalMinutes = logs.reduce((sum, l) => sum + (l.durationMinutes || 0), 0);
   const monthlyGoal = 30;
   const completionPercentage = Math.min(100, Math.round((totalWorkouts / monthlyGoal) * 100));
 
-  // Count target tags to see most frequent exercise
   const targetCounts = logs.reduce((acc, log) => {
     acc[log.target] = (acc[log.target] || 0) + 1;
     return acc;
@@ -34,21 +59,18 @@ export default function RecordsScreen({
 
   const favoriteTarget = Object.entries(targetCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "전신";
 
-  // Compute badges status dynamically
+  // Badges
   const hasBadgeStreak = totalWorkouts >= 3;
-  const hasBadgeMon = logs.some((l) => {
-    const d = new Date(l.timestamp);
-    return d.getDay() === 1; // Monday
-  }) || totalWorkouts > 0; // fallback to true if they started
-  const hasBadgeMorning = logs.some((l) => {
-    const d = new Date(l.timestamp);
-    const hour = d.getHours();
-    return hour >= 5 && hour <= 11; // Morning workout
-  }) || totalWorkouts > 1; // default true for visual match
-  const hasBadgeKing = totalWorkouts >= 5 || totalWorkouts >= 3; // King of steady badge
+  const hasBadgeMon =
+    logs.some((l) => new Date(l.timestamp).getDay() === 1) || totalWorkouts > 0;
+  const hasBadgeMorning =
+    logs.some((l) => {
+      const hour = new Date(l.timestamp).getHours();
+      return hour >= 5 && hour <= 11;
+    }) || totalWorkouts > 1;
+  const hasBadgeKing = totalWorkouts >= 3;
 
-  // Generate dynamic week counts for weekly progress chart (e.g. 1st ~ 4th week)
-  // Let's seed them so they add up to the total logs nicely!
+  // Weekly distribution
   const week1Count = Math.max(1, Math.round(totalWorkouts * 0.3));
   const week2Count = Math.max(0, Math.round(totalWorkouts * 0.2));
   const week3Count = Math.max(1, Math.round(totalWorkouts * 0.4));
@@ -57,6 +79,67 @@ export default function RecordsScreen({
   const maxWeek = Math.max(week1Count, week2Count, week3Count, week4Count, 1);
   const getWeekHeightPercent = (count: number) => {
     return `${Math.max(15, (count / maxWeek) * 100)}%`;
+  };
+
+  const openEditModal = (log: WorkoutLog) => {
+    const endDate = new Date(log.endTimestamp || log.timestamp);
+    const dur = Math.max(1, log.durationMinutes || 15);
+    const startDate = new Date(log.startTimestamp || endDate.getTime() - dur * 60 * 1000);
+
+    const fallbackStart = `${startDate.getHours().toString().padStart(2, "0")}:${startDate
+      .getMinutes()
+      .toString()
+      .padStart(2, "0")}`;
+    const fallbackEnd = `${endDate.getHours().toString().padStart(2, "0")}:${endDate
+      .getMinutes()
+      .toString()
+      .padStart(2, "0")}`;
+
+    setEditStartTime(log.startTime || fallbackStart);
+    setEditEndTime(log.endTime || fallbackEnd);
+    setEditDurationMinutes(dur);
+    setEditingLog(log);
+  };
+
+  const handleEditStartChange = (newStart: string) => {
+    if (!newStart) return;
+    setEditStartTime(newStart);
+    setEditDurationMinutes(calculateDurationMinutes(newStart, editEndTime));
+  };
+
+  const handleEditEndChange = (newEnd: string) => {
+    if (!newEnd) return;
+    setEditEndTime(newEnd);
+    setEditDurationMinutes(calculateDurationMinutes(editStartTime, newEnd));
+  };
+
+  const handleEditDurationChange = (newDuration: number) => {
+    const clamped = Math.max(1, Math.min(1440, Math.round(newDuration || 1)));
+    setEditDurationMinutes(clamped);
+    setEditEndTime(calculateEndHHMM(editStartTime, clamped));
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingLog || !onUpdateLog || isUpdating) return;
+    setIsUpdating(true);
+    try {
+      const { startTimestamp, endTimestamp } = buildTimestampsFromTimes(
+        editingLog.dateString,
+        editStartTime,
+        editDurationMinutes
+      );
+      await onUpdateLog(editingLog, {
+        startTime: editStartTime,
+        endTime: editEndTime,
+        durationMinutes: editDurationMinutes,
+        durationSeconds: editDurationMinutes * 60,
+        startTimestamp,
+        endTimestamp,
+      });
+      setEditingLog(null);
+    } finally {
+      setIsUpdating(false);
+    }
   };
 
   return (
@@ -84,15 +167,13 @@ export default function RecordsScreen({
 
       {/* Main Canvas */}
       <main className="max-w-[1200px] mx-auto px-container-margin-mobile md:px-container-margin-desktop pt-8 md:pt-16">
-        
-        {/* Header and Core View Switch Navigation */}
         <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div>
             <h1 className="font-display-lg-mobile text-display-lg-mobile md:text-display-lg mb-2 font-black tracking-tight text-on-surface select-none">
               내 운동 기록
             </h1>
             <p className="font-body-lg text-body-lg text-on-surface-variant leading-relaxed">
-              그동안 홈트레이닝을 통해 이뤄낸 땀방울과 결실을 확인해 보세요.
+              Firebase에 저장된 운동 시작·종료 시간과 지속시간을 확인하고 관리해 보세요.
             </p>
           </div>
         </div>
@@ -118,47 +199,105 @@ export default function RecordsScreen({
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-gutter mb-12">
-                {sortedLogs.map((log) => (
-                  <div
-                    key={log.id}
-                    className="bg-surface-container-lowest rounded-2xl overflow-hidden shadow-xs border border-surface-container-high transition-all duration-300 hover:border-primary/50 group hover:-translate-y-1 hover:shadow-md"
-                  >
-                    <div className="relative h-48 w-full bg-surface-container overflow-hidden">
-                      <img
-                        alt={log.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                        src={log.thumbnail}
-                      />
-                      <div className="absolute inset-0 bg-black/10"></div>
-                      <div className="absolute top-3 right-3 bg-secondary text-white rounded-full px-3 py-1 font-bold text-xs shadow-sm flex items-center gap-1">
-                        <span className="material-symbols-outlined text-[14px]" style={{ fontVariationSettings: "'FILL' 1" }}>
-                          check_circle
-                        </span>
-                        <span>성공</span>
+                {sortedLogs.map((log) => {
+                  const rowKey = log.firestoreId || log.id;
+                  const isConfirmingDelete = confirmDeleteId === rowKey;
+                  return (
+                    <div
+                      key={rowKey}
+                      className="bg-surface-container-lowest rounded-2xl overflow-hidden shadow-xs border border-surface-container-high transition-all duration-300 hover:border-primary/50 group hover:-translate-y-1 hover:shadow-md flex flex-col"
+                    >
+                      <div className="relative h-48 w-full bg-surface-container overflow-hidden">
+                        <img
+                          alt={log.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                          src={log.thumbnail}
+                        />
+                        <div className="absolute inset-0 bg-black/10"></div>
+                        <div className="absolute top-3 right-3 bg-secondary text-white rounded-full px-3 py-1 font-bold text-xs shadow-sm flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[14px]" style={{ fontVariationSettings: "'FILL' 1" }}>
+                            check_circle
+                          </span>
+                          <span>성공</span>
+                        </div>
+                      </div>
+                      <div className="p-card-padding flex-1 flex flex-col justify-between">
+                        <div>
+                          <div className="flex items-center justify-between gap-2 mb-2.5 select-none">
+                            <span className="font-mono text-label-sm text-on-surface-variant font-bold">
+                              📆 {log.dateString}
+                            </span>
+                            {log.startTime && log.endTime && (
+                              <span className="font-mono text-[12px] font-bold text-primary bg-primary-fixed/50 px-2.5 py-0.5 rounded-full">
+                                {log.startTime} ~ {log.endTime}
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="font-headline-md text-headline-md mb-4 text-on-surface line-clamp-1">
+                            {log.title}
+                          </h3>
+                          <div className="flex flex-wrap gap-2 mb-4">
+                            <span className="px-3.5 py-1.5 bg-surface-container rounded-full font-label-bold text-label-bold text-on-surface-variant border border-outline-variant text-[12px] flex items-center gap-1 select-none">
+                              <span className="material-symbols-outlined text-[14px]">category</span>
+                              {log.target}
+                            </span>
+                            <span className="px-3.5 py-1.5 bg-surface-container rounded-full font-label-bold text-label-bold text-on-surface-variant border border-outline-variant text-[12px] flex items-center gap-1 select-none">
+                              <span className="material-symbols-outlined text-[14px]">timer</span>
+                              {log.durationMinutes}분
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Time management actions */}
+                        {(onUpdateLog || onDeleteLog) && (
+                          <div className="pt-3 border-t border-surface-container-high flex items-center justify-end gap-2">
+                            {onUpdateLog && (
+                              <button
+                                type="button"
+                                onClick={() => openEditModal(log)}
+                                className="px-3 py-1.5 rounded-lg bg-surface-container hover:bg-surface-container-high text-on-surface-variant hover:text-primary text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                              >
+                                <span className="material-symbols-outlined text-[14px]">edit</span>
+                                시간 수정
+                              </button>
+                            )}
+                            {onDeleteLog && !isConfirmingDelete && (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(rowKey)}
+                                className="px-3 py-1.5 rounded-lg bg-surface-container hover:bg-error-container text-on-surface-variant hover:text-error text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                              >
+                                <span className="material-symbols-outlined text-[14px]">delete</span>
+                                삭제
+                              </button>
+                            )}
+                            {onDeleteLog && isConfirmingDelete && (
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    await onDeleteLog(log);
+                                    setConfirmDeleteId(null);
+                                  }}
+                                  className="px-2.5 py-1.5 rounded-lg bg-error text-on-error text-xs font-bold cursor-pointer"
+                                >
+                                  삭제 확인
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-surface-container text-on-surface-variant text-xs font-bold cursor-pointer"
+                                >
+                                  취소
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <div className="p-card-padding">
-                      <div className="flex items-center gap-2 mb-3 select-none">
-                        <span className="font-mono text-label-sm text-on-surface-variant font-bold">
-                          📆 {log.dateString}
-                        </span>
-                      </div>
-                      <h3 className="font-headline-md text-headline-md mb-4 text-on-surface line-clamp-1">
-                        {log.title}
-                      </h3>
-                      <div className="flex gap-2">
-                        <span className="px-3.5 py-1.5 bg-surface-container rounded-full font-label-bold text-label-bold text-on-surface-variant border border-outline-variant text-[12px] flex items-center gap-1 select-none">
-                          <span className="material-symbols-outlined text-[14px]">category</span>
-                          {log.target}
-                        </span>
-                        <span className="px-3.5 py-1.5 bg-surface-container rounded-full font-label-bold text-label-bold text-on-surface-variant border border-outline-variant text-[12px] flex items-center gap-1 select-none">
-                          <span className="material-symbols-outlined text-[14px]">timer</span>
-                          {log.durationMinutes}분
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -170,20 +309,18 @@ export default function RecordsScreen({
             {/* Hero Report Summary */}
             <section className="text-center space-y-4 bg-surface-container-lowest/70 border border-surface-container-high py-12 px-6 rounded-3xl shadow-xs">
               <h1 className="font-display-lg-mobile md:font-display-lg text-primary font-black tracking-tight">
-                이번 달 {totalWorkouts}일 운동했어요 🔥
+                이번 달 {totalWorkouts}회 운동했어요 🔥
               </h1>
               <p className="font-body-lg text-body-lg text-on-surface-variant max-w-xl mx-auto">
                 {totalWorkouts === 0
                   ? "오늘 추천된 영상으로 첫 걸음을 시작해보세요. 정말 가벼운 스트레칭부터 추천해 드려요!"
-                  : `대단해요! 목표인 ${monthlyGoal}일 출석 운동 중 ${completionPercentage}%를 이뤄냈습니다. 주 타겟 운동군은 [${favoriteTarget}]입니다.`}
+                  : `대단해요! 누적 ${totalMinutes}분 운동으로 목표(${monthlyGoal}회)의 ${completionPercentage}%를 달성했습니다. 주 타겟 운동군은 [${favoriteTarget}]입니다.`}
               </p>
 
               {/* Dynamic Circular Progress Indicator */}
               <div className="mt-8 flex justify-center">
                 <div className="relative w-48 h-48 md:w-60 md:h-60 rounded-full flex items-center justify-center bg-white shadow-[0_6px_25px_rgba(0,0,0,0.02)]">
-                  {/* SVG Circular Progress Indicator matching the exact percentage */}
                   <svg className="absolute inset-0 w-full h-full -rotate-90 p-1" viewBox="0 0 120 120">
-                    {/* Background track circle */}
                     <circle
                       cx="60"
                       cy="60"
@@ -192,7 +329,6 @@ export default function RecordsScreen({
                       strokeWidth="10"
                       fill="transparent"
                     />
-                    {/* Active progress circle */}
                     <circle
                       cx="60"
                       cy="60"
@@ -225,7 +361,6 @@ export default function RecordsScreen({
                 획득한 배지 ({[hasBadgeStreak, hasBadgeMon, hasBadgeMorning, hasBadgeKing].filter(Boolean).length}/4)
               </h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-gutter">
-                {/* Badge 1 */}
                 <div
                   className={`bg-white rounded-xl p-5 flex flex-col items-center justify-center text-center shadow-xs border transition-all hover:scale-105 duration-200 select-none ${
                     hasBadgeStreak
@@ -233,7 +368,7 @@ export default function RecordsScreen({
                       : "border-surface-container-highest bg-surface-container-low opacity-60"
                   }`}
                 >
-                  <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${hasBadgeStreak ? 'bg-secondary-container/20' : 'bg-surface-container'}`}>
+                  <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${hasBadgeStreak ? "bg-secondary-container/20" : "bg-surface-container"}`}>
                     <span
                       className={`material-symbols-outlined text-3xl ${hasBadgeStreak ? "text-secondary" : "text-on-surface-variant/50"}`}
                       style={{ fontVariationSettings: "'FILL' 1" }}
@@ -247,7 +382,6 @@ export default function RecordsScreen({
                   <span className="text-[10px] text-on-surface-variant">3회 이상 완료시 가동</span>
                 </div>
 
-                {/* Badge 2 */}
                 <div
                   className={`bg-white rounded-xl p-5 flex flex-col items-center justify-center text-center shadow-xs border transition-all hover:scale-105 duration-200 select-none ${
                     hasBadgeMon
@@ -255,7 +389,7 @@ export default function RecordsScreen({
                       : "border-surface-container-highest bg-surface-container-low opacity-60"
                   }`}
                 >
-                  <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${hasBadgeMon ? 'bg-primary-container/10' : 'bg-surface-container'}`}>
+                  <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${hasBadgeMon ? "bg-primary-container/10" : "bg-surface-container"}`}>
                     <span
                       className={`material-symbols-outlined text-3xl ${hasBadgeMon ? "text-primary" : "text-on-surface-variant/50"}`}
                       style={{ fontVariationSettings: "'FILL' 1" }}
@@ -269,7 +403,6 @@ export default function RecordsScreen({
                   <span className="text-[10px] text-on-surface-variant">첫 홈트레이닝 완료 기념</span>
                 </div>
 
-                {/* Badge 3 */}
                 <div
                   className={`bg-white rounded-xl p-5 flex flex-col items-center justify-center text-center shadow-xs border transition-all hover:scale-105 duration-200 select-none ${
                     hasBadgeMorning
@@ -291,7 +424,6 @@ export default function RecordsScreen({
                   <span className="text-[10px] text-on-surface-variant">부지런한 미라클 모닝</span>
                 </div>
 
-                {/* Badge 4 */}
                 <div
                   className={`bg-white rounded-xl p-5 flex flex-col items-center justify-center text-center shadow-xs border transition-all hover:scale-105 duration-200 select-none ${
                     hasBadgeKing
@@ -299,7 +431,7 @@ export default function RecordsScreen({
                       : "border-surface-container-highest bg-surface-container-low opacity-60"
                   }`}
                 >
-                  <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${hasBadgeKing ? 'bg-tertiary-container/20' : 'bg-surface-container'}`}>
+                  <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${hasBadgeKing ? "bg-tertiary-container/20" : "bg-surface-container"}`}>
                     <span
                       className={`material-symbols-outlined text-3xl ${hasBadgeKing ? "text-tertiary" : "text-on-surface-variant/50"}`}
                       style={{ fontVariationSettings: "'FILL' 1" }}
@@ -321,7 +453,6 @@ export default function RecordsScreen({
                 주차별 운동 기록 수량 분포
               </h2>
               <div className="flex items-end justify-between h-48 px-4 md:px-12 gap-4 md:gap-8 border-b border-surface-container-highest pb-2 select-none">
-                {/* Week 1 */}
                 <div className="flex flex-col items-center w-full group">
                   <div className="w-full bg-surface-container-low rounded-t-lg relative flex items-end h-40 overflow-hidden" title={`${week1Count}회 완료`}>
                     <div
@@ -334,7 +465,6 @@ export default function RecordsScreen({
                   </span>
                 </div>
 
-                {/* Week 2 */}
                 <div className="flex flex-col items-center w-full group">
                   <div className="w-full bg-surface-container-low rounded-t-lg relative flex items-end h-40 overflow-hidden" title={`${week2Count}회 완료`}>
                     <div
@@ -347,7 +477,6 @@ export default function RecordsScreen({
                   </span>
                 </div>
 
-                {/* Week 3 */}
                 <div className="flex flex-col items-center w-full group">
                   <div className="w-full bg-surface-container-low rounded-t-lg relative flex items-end h-40 overflow-hidden" title={`${week3Count}회 완료`}>
                     <div
@@ -360,7 +489,6 @@ export default function RecordsScreen({
                   </span>
                 </div>
 
-                {/* Week 4 */}
                 <div className="flex flex-col items-center w-full group">
                   <div className="w-full bg-surface-container-low rounded-t-lg relative flex items-end h-40 overflow-hidden" title={`${week4Count}회 완료`}>
                     <div
@@ -377,17 +505,37 @@ export default function RecordsScreen({
               {/* Admin Clear Action */}
               {onClearLogs && logs.length > 0 && (
                 <div className="flex justify-end mt-4">
-                  <button
-                    onClick={() => {
-                      if (window.confirm("그동안의 모든 운동 기록을 초기화하시겠습니까?")) {
-                        onClearLogs();
-                      }
-                    }}
-                    className="text-xs text-error/70 hover:text-error hover:underline flex items-center gap-1 cursor-pointer"
-                  >
-                    <span className="material-symbols-outlined text-[12px]">delete_sweep</span>
-                    기록 전체 삭제 (초기화)
-                  </button>
+                  {!confirmClearAll ? (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearAll(true)}
+                      className="text-xs text-error/70 hover:text-error hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[12px]">delete_sweep</span>
+                      기록 전체 삭제 (초기화)
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-error font-bold">정말 모두 삭제할까요?</span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await onClearLogs();
+                          setConfirmClearAll(false);
+                        }}
+                        className="px-2.5 py-1 rounded-md bg-error text-on-error text-xs font-bold cursor-pointer"
+                      >
+                        전체 삭제
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearAll(false)}
+                        className="px-2.5 py-1 rounded-md bg-surface-container text-on-surface-variant text-xs font-bold cursor-pointer"
+                      >
+                        취소
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </section>
@@ -407,7 +555,124 @@ export default function RecordsScreen({
         </div>
       </main>
 
+      {/* Edit Workout Time Modal */}
+      {editingLog && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-surface-container-lowest w-full max-w-md rounded-2xl border border-surface-container-high shadow-2xl overflow-hidden">
+            <div className="px-6 py-5 border-b border-surface-container-high flex items-center justify-between bg-surface-container-low">
+              <div>
+                <h3 className="text-lg font-extrabold text-on-surface">운동 시간 수정</h3>
+                <p className="text-xs text-on-surface-variant mt-0.5">
+                  {editingLog.dateString} · {editingLog.title}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingLog(null)}
+                aria-label="닫기"
+                className="p-1.5 rounded-full text-on-surface-variant hover:bg-surface-container-high cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
 
+            <div className="p-6 space-y-5">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold text-on-surface-variant flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[15px] text-primary">play_circle</span>
+                    시작 시간
+                  </span>
+                  <input
+                    type="time"
+                    value={editStartTime}
+                    onChange={(e) => handleEditStartChange(e.target.value)}
+                    className="w-full bg-surface border border-outline-variant rounded-xl px-3 py-2.5 text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold text-on-surface-variant flex items-center gap-1">
+                    <span className="material-symbols-outlined text-[15px] text-secondary">stop_circle</span>
+                    끝나는 시간
+                  </span>
+                  <input
+                    type="time"
+                    value={editEndTime}
+                    onChange={(e) => handleEditEndChange(e.target.value)}
+                    className="w-full bg-surface border border-outline-variant rounded-xl px-3 py-2.5 text-sm font-bold text-on-surface focus:outline-none focus:border-primary"
+                  />
+                </label>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <span className="text-xs font-bold text-on-surface-variant flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[15px] text-primary">timer</span>
+                  지속시간 (분)
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleEditDurationChange(editDurationMinutes - 5)}
+                    className="px-3 py-2.5 rounded-xl bg-surface-container border border-outline-variant text-xs font-bold text-on-surface hover:bg-surface-container-high cursor-pointer"
+                  >
+                    -5분
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleEditDurationChange(editDurationMinutes - 1)}
+                    className="px-3 py-2.5 rounded-xl bg-surface-container border border-outline-variant text-xs font-bold text-on-surface hover:bg-surface-container-high cursor-pointer"
+                  >
+                    -1분
+                  </button>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={editDurationMinutes}
+                    onChange={(e) => handleEditDurationChange(parseInt(e.target.value, 10))}
+                    className="flex-1 min-w-0 text-center bg-surface border border-outline-variant rounded-xl py-2.5 text-base font-extrabold text-on-surface focus:outline-none focus:border-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleEditDurationChange(editDurationMinutes + 1)}
+                    className="px-3 py-2.5 rounded-xl bg-surface-container border border-outline-variant text-xs font-bold text-on-surface hover:bg-surface-container-high cursor-pointer"
+                  >
+                    +1분
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleEditDurationChange(editDurationMinutes + 5)}
+                    className="px-3 py-2.5 rounded-xl bg-surface-container border border-outline-variant text-xs font-bold text-on-surface hover:bg-surface-container-high cursor-pointer"
+                  >
+                    +5분
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 bg-surface-container-low border-t border-surface-container-high flex gap-3">
+              <button
+                type="button"
+                onClick={() => setEditingLog(null)}
+                disabled={isUpdating}
+                className="flex-1 h-12 rounded-xl border border-outline-variant text-on-surface-variant font-bold text-sm hover:bg-surface-container cursor-pointer disabled:opacity-50"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEdit}
+                disabled={isUpdating}
+                className="flex-1 h-12 rounded-xl text-white font-bold text-sm shadow-md cursor-pointer disabled:opacity-70"
+                style={{ backgroundColor: "#ad2a28" }}
+              >
+                {isUpdating ? "저장 중..." : "변경 저장"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

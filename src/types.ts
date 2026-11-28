@@ -12,6 +12,16 @@ export interface Workout {
   difficultyDesc: string; // e.g. "고강도 매운맛", "코어 집중"
 }
 
+export interface WorkoutTimeDetails {
+  startTime: string; // "HH:mm"
+  endTime: string; // "HH:mm"
+  durationMinutes: number;
+  durationSeconds: number;
+  startTimestamp: number;
+  endTimestamp: number;
+  dateString: string; // "YYYY.MM.DD"
+}
+
 export interface WorkoutLog {
   id: string;
   workoutId: string;
@@ -19,9 +29,14 @@ export interface WorkoutLog {
   dateString: string; // "YYYY.MM.DD"
   timestamp: number;
   durationMinutes: number;
+  durationSeconds?: number;
+  startTime?: string; // "HH:mm"
+  endTime?: string; // "HH:mm"
+  startTimestamp?: number;
+  endTimestamp?: number;
   target: string;
   thumbnail: string;
-  firestoreId?: string; // Add this
+  firestoreId?: string;
 }
 
 export interface UserSettings {
