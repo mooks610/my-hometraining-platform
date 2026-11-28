@@ -118,7 +118,9 @@ export default function RecommendScreen({
         </article>
 
         <p className="text-center font-label-sm text-label-sm text-on-surface-variant mt-6 max-w-sm">
-          매일 자정에 새로운 홈트레이닝이 추천됩니다. 고민하지 말고 건강한 땀방울을 시작해 보세요!
+          매일 자정에 새로운 홈트레이닝이 추천됩니다.
+          <br />
+          고민하지 말고 건강한 땀방울을 시작해 보세요!
         </p>
       </main>
 

@@ -27,8 +27,8 @@ export default function PlaybackScreen({ workout, onClose, onComplete }: Playbac
   const [dateString, setDateString] = useState<string>(() => formatDateYYYYMMDD(new Date()));
 
   useEffect(() => {
-    const defaultStart = Math.min(Math.floor(workout.durationSeconds * 0.49), 443);
-    setElapsed(defaultStart);
+    setElapsed(0);
+    setIsPlaying(true);
   }, [workout]);
 
   // Handle timer
